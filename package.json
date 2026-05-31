@@ -1,0 +1,49 @@
+{
+  "name": "crawlgraph-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for the CrawlGraph backlink-intelligence API (Common Crawl webgraph). Backlink lookups, competitor gap analysis, and a ready-made outreach-target finder for any MCP client.",
+  "license": "MIT",
+  "author": "Petteri Pucilowski",
+  "homepage": "https://crawlgraph.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pucilpet/crawlgraph-mcp.git"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "seo",
+    "backlinks",
+    "common-crawl",
+    "gap-analysis",
+    "crawlgraph",
+    "ahrefs-alternative",
+    "claude",
+    "cursor"
+  ],
+  "type": "module",
+  "bin": {
+    "crawlgraph-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "start": "node dist/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}
