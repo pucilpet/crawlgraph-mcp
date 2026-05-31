@@ -1,0 +1,27 @@
+# Smithery configuration — https://smithery.ai/docs
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required:
+      - crawlgraphApiKey
+    properties:
+      crawlgraphApiKey:
+        type: string
+        title: CrawlGraph API Key
+        description: Your CrawlGraph API key (cg_live_...), from https://crawlgraph.com/account
+      crawlgraphBaseUrl:
+        type: string
+        title: Base URL
+        description: Override the API base URL (default https://crawlgraph.com)
+  commandFunction: |
+    (config) => ({
+      command: 'node',
+      args: ['dist/index.js'],
+      env: {
+        CRAWLGRAPH_API_KEY: config.crawlgraphApiKey,
+        ...(config.crawlgraphBaseUrl ? { CRAWLGRAPH_BASE_URL: config.crawlgraphBaseUrl } : {})
+      }
+    })
+exampleConfig:
+  crawlgraphApiKey: cg_live_example_key_replace_me
