@@ -82,6 +82,22 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Fetch a single domain's own authority/rank via the backlinks endpoint.
+ * The backlinks response carries the QUERIED domain's cg_authority/cg_rank
+ * at the top level, so limit:1 is the cheapest way to score one domain.
+ * Costs one backlinks call against the monthly quota.
+ */
+async function domainAuthority(
+  domain: string,
+): Promise<{ cg_authority: number | null; cg_rank: number | null }> {
+  const data = await api("POST", "/backlinks", { domain, limit: 1 });
+  return {
+    cg_authority: data?.cg_authority ?? null,
+    cg_rank: data?.cg_rank ?? null,
+  };
+}
+
+/**
  * Submit a gap-analysis job and poll until it completes or times out.
  * Returns the completed result object: {my_domain, competitor_domains, gaps, total_gaps}.
  */
@@ -232,8 +248,10 @@ server.tool(
     "prioritised outreach list: PRIORITY = domains linking to ALL of your " +
     "competitors but not to you (publishers who cover your whole space and have " +
     "simply never heard of you — the warmest backlink targets you will ever pitch), " +
-    "SECONDARY = domains linking to 2+ competitors. Use 2-3 competitors for the " +
-    "sharpest signal. Costs one gap job against the monthly quota.",
+    "SECONDARY = domains linking to 2+ competitors. Platform/CDN noise is filtered " +
+    "out, and the top N priority targets are scored by CrawlGraph authority so the " +
+    "highest-value ones rank first. Use 2-3 competitors for the sharpest signal. " +
+    "Costs one gap job plus one backlinks call per enriched target.",
   {
     my_domain: z.string().min(1).max(253).describe("Your domain."),
     competitor_domains: z
@@ -247,8 +265,17 @@ server.tool(
       .describe(
         "Keep platform/CDN/social domains (amazonaws, github, facebook, ...) in the list. Default false — they are filtered out as non-outreachable noise.",
       ),
+    enrich_top: z
+      .number()
+      .int()
+      .min(0)
+      .max(25)
+      .optional()
+      .describe(
+        "Look up the CrawlGraph authority score for the top N priority targets so they can be ranked by authority. Default 10. Each enriched domain costs ONE backlinks call against your monthly quota (so 10 = 10 calls). Set 0 to skip enrichment and rank by competitor-overlap only.",
+      ),
   },
-  async ({ my_domain, competitor_domains, include_platforms }) => {
+  async ({ my_domain, competitor_domains, include_platforms, enrich_top }) => {
     const result = await runGapJob(my_domain, competitor_domains);
     const total = competitor_domains.length;
     const rawGaps: Array<{ linking_domain: string; found_on: string[] }> = result.gaps || [];
@@ -274,13 +301,51 @@ server.tool(
           b.overlap - a.overlap || a.linking_domain.localeCompare(b.linking_domain),
       );
 
-    const priority = ranked.filter((g) => g.overlap >= total);
+    const priority: Array<{
+      linking_domain: string;
+      found_on: string[];
+      overlap: number;
+      cg_authority?: number | null;
+      cg_rank?: number | null;
+    }> = ranked.filter((g) => g.overlap >= total);
     const secondary = ranked.filter((g) => g.overlap >= 2 && g.overlap < total);
+
+    // Authority enrichment: score the top N priority targets so they can be
+    // ranked by authority (highest-value warm targets first). Each lookup is
+    // one backlinks-quota call, so this is capped and opt-out-able.
+    const enrichN = enrich_top === undefined ? 10 : enrich_top;
+    let enrichedCount = 0;
+    if (enrichN > 0 && priority.length > 0) {
+      const toEnrich = priority.slice(0, enrichN);
+      for (const target of toEnrich) {
+        try {
+          const { cg_authority, cg_rank } = await domainAuthority(target.linking_domain);
+          target.cg_authority = cg_authority;
+          target.cg_rank = cg_rank;
+          enrichedCount++;
+        } catch {
+          // Quota exhaustion or a single bad lookup shouldn't sink the whole
+          // result — leave that target unscored and stop enriching further.
+          target.cg_authority = null;
+          break;
+        }
+        await sleep(250); // stay well under the 60/min burst limit
+      }
+      // Re-sort the enriched slice by authority desc (nulls last), then splice
+      // it back ahead of the un-enriched remainder.
+      const enrichedSlice = priority.slice(0, toEnrich.length).sort((a, b) => {
+        const aa = a.cg_authority ?? -1;
+        const bb = b.cg_authority ?? -1;
+        return bb - aa || a.linking_domain.localeCompare(b.linking_domain);
+      });
+      priority.splice(0, enrichedSlice.length, ...enrichedSlice);
+    }
 
     const summary =
       `${priority.length} PRIORITY targets (link to all ${total} competitors but not ${my_domain}), ` +
       `${secondary.length} secondary (link to 2+). ` +
       (filteredOut ? `${filteredOut} platform/CDN domains filtered out. ` : "") +
+      (enrichedCount ? `Top ${enrichedCount} scored by authority. ` : "") +
       `Pitch the priority list first — they already link to your whole category.`;
 
     return {
@@ -296,6 +361,7 @@ server.tool(
               secondary_targets: secondary,
               total_gaps: result.total_gaps,
               platforms_filtered: include_platforms ? 0 : filteredOut,
+              authority_enriched: enrichedCount,
             },
             null,
             2,
