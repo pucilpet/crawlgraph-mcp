@@ -11,9 +11,10 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ListResourcesRequestSchema, ListPromptsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.2.1";
 const BASE_URL = (process.env.CRAWLGRAPH_BASE_URL || "https://crawlgraph.com").replace(/\/+$/, "");
 const UA = `crawlgraph-mcp/${VERSION}`;
 
@@ -112,7 +113,15 @@ export function buildServer(getApiKey: () => string): McpServer {
     );
   }
 
-  const server = new McpServer({ name: "crawlgraph", version: VERSION });
+  const server = new McpServer(
+    { name: "crawlgraph", version: VERSION },
+    // CrawlGraph is tools-only, but clients (Smithery, etc.) probe all three
+    // capability types on connect. Advertise empty resources/prompts so those
+    // probes return [] instead of a "-32601 Method not found" warning.
+    { capabilities: { resources: {}, prompts: {} } },
+  );
+  server.server.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources: [] }));
+  server.server.setRequestHandler(ListPromptsRequestSchema, async () => ({ prompts: [] }));
 
   server.tool(
     "backlinks",
