@@ -14,7 +14,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ListResourcesRequestSchema, ListPromptsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
-export const VERSION = "0.2.1";
+export const VERSION = "0.2.2";
 const BASE_URL = (process.env.CRAWLGRAPH_BASE_URL || "https://crawlgraph.com").replace(/\/+$/, "");
 const UA = `crawlgraph-mcp/${VERSION}`;
 
@@ -42,6 +42,61 @@ function isPlatformNoise(domain: string): boolean {
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+// ── Output schemas ────────────────────────────────────────────────────────────
+// Declared on each tool (outputSchema) so clients get a typed contract, and
+// mirrored by the `structuredContent` each handler returns. Shapes match the
+// curated objects the handlers build (not the raw API body), so validation is
+// stable even if the API adds fields.
+const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
+
+const backlinkRowShape = {
+  linking_domain: z.string(),
+  num_hosts: z.number(),
+  tld: z.string().optional(),
+  cg_authority: z.number().nullable(),
+  cg_rank: z.number().nullable(),
+};
+
+const backlinksOutputShape = {
+  domain: z.string(),
+  release_id: z.string(),
+  release_label: z.string(),
+  total_linking_domains: z.number(),
+  returned: z.number(),
+  cg_authority: z.number().nullable(),
+  cg_rank: z.number().nullable(),
+  results: z.array(z.object(backlinkRowShape)),
+};
+
+const gapAnalysisOutputShape = {
+  my_domain: z.string(),
+  competitor_domains: z.array(z.string()),
+  total_gaps: z.number(),
+  gaps: z.array(z.object({ linking_domain: z.string(), found_on: z.array(z.string()) })),
+};
+
+const outreachTargetShape = {
+  linking_domain: z.string(),
+  found_on: z.array(z.string()),
+  overlap: z.number(),
+  cg_authority: z.number().nullable().optional(),
+  cg_rank: z.number().nullable().optional(),
+};
+
+const outreachOutputShape = {
+  my_domain: z.string(),
+  competitor_domains: z.array(z.string()),
+  priority_targets: z.array(z.object(outreachTargetShape)),
+  secondary_targets: z.array(z.object(outreachTargetShape)),
+  total_gaps: z.number(),
+  platforms_filtered: z.number(),
+  authority_enriched: z.number(),
+};
+
+const releasesOutputShape = {
+  releases: z.array(z.object({ id: z.string(), label: z.string(), available: z.boolean() })),
+};
 
 export function buildServer(getApiKey: () => string): McpServer {
   async function api(method: "GET" | "POST", path: string, body?: unknown): Promise<any> {
@@ -123,17 +178,23 @@ export function buildServer(getApiKey: () => string): McpServer {
   server.server.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources: [] }));
   server.server.setRequestHandler(ListPromptsRequestSchema, async () => ({ prompts: [] }));
 
-  server.tool(
+  server.registerTool(
     "backlinks",
-    "Look up referring domains (backlinks) for a single target domain from the " +
-      "Common Crawl webgraph. Returns each linking domain with host count and " +
-      "CrawlGraph authority score, plus the target's own authority/rank. " +
-      "Costs one backlinks call against the monthly quota (1,000/mo on lifetime).",
     {
-      domain: z.string().min(1).max(253).describe("Target domain, e.g. 'stripe.com'."),
-      limit: z.number().int().min(1).max(10000).optional().describe("Max rows (1..10000, default 1000)."),
-      sort: z.enum(["authority", "hosts"]).optional().describe("'authority' (default) or 'hosts'."),
-      release_id: z.string().optional().describe("Common Crawl release id (defaults to latest; see the releases tool)."),
+      title: "Backlink lookup",
+      description:
+        "Look up referring domains (backlinks) for a single target domain from the " +
+        "Common Crawl webgraph. Returns each linking domain with host count and " +
+        "CrawlGraph authority score, plus the target's own authority/rank. " +
+        "Costs one backlinks call against the monthly quota (1,000/mo on lifetime).",
+      inputSchema: {
+        domain: z.string().min(1).max(253).describe("Target domain, e.g. 'stripe.com'."),
+        limit: z.number().int().min(1).max(10000).optional().describe("Max rows (1..10000, default 1000)."),
+        sort: z.enum(["authority", "hosts"]).optional().describe("'authority' (default) or 'hosts'."),
+        release_id: z.string().optional().describe("Common Crawl release id (defaults to latest; see the releases tool)."),
+      },
+      outputSchema: backlinksOutputShape,
+      annotations: { title: "Backlink lookup", ...READ_ONLY },
     },
     async ({ domain, limit, sort, release_id }) => {
       const data = await api("POST", "/backlinks", {
@@ -142,45 +203,79 @@ export function buildServer(getApiKey: () => string): McpServer {
         ...(sort !== undefined ? { sort } : {}),
         ...(release_id !== undefined ? { release_id } : {}),
       });
+      const structuredContent = {
+        domain: data.domain,
+        release_id: data.release_id,
+        release_label: data.release_label,
+        total_linking_domains: data.total_linking_domains,
+        returned: data.returned,
+        cg_authority: data.cg_authority ?? null,
+        cg_rank: data.cg_rank ?? null,
+        results: (data.results || []).map((r: any) => ({
+          linking_domain: r.linking_domain,
+          num_hosts: r.num_hosts,
+          tld: r.tld,
+          cg_authority: r.cg_authority ?? null,
+          cg_rank: r.cg_rank ?? null,
+        })),
+      };
       const summary =
         `${data.domain} — ${data.total_linking_domains} referring domains ` +
         `(release ${data.release_label}). Showing ${data.returned}. ` +
         `Target authority: ${data.cg_authority ?? "n/a"}/100.`;
-      return { content: [{ type: "text", text: summary }, { type: "text", text: JSON.stringify(data, null, 2) }] };
+      return { content: [{ type: "text", text: summary }, { type: "text", text: JSON.stringify(structuredContent, null, 2) }], structuredContent };
     },
   );
 
-  server.tool(
+  server.registerTool(
     "gap_analysis",
-    "Run a competitor backlink gap analysis: find domains that link to one or more " +
-      "of your competitors but NOT to you. Submits an async job and polls until done " +
-      "(usually 5-30s). Returns every gap with `found_on` listing which competitors " +
-      "each domain links to. Costs one gap job against the monthly quota (50/mo on lifetime).",
     {
-      my_domain: z.string().min(1).max(253).describe("Your domain."),
-      competitor_domains: z.array(z.string().min(1).max(253)).min(1).max(5).describe("1 to 5 competitor domains."),
+      title: "Competitor backlink gap analysis",
+      description:
+        "Run a competitor backlink gap analysis: find domains that link to one or more " +
+        "of your competitors but NOT to you. Submits an async job and polls until done " +
+        "(usually 5-30s). Returns every gap with `found_on` listing which competitors " +
+        "each domain links to. Costs one gap job against the monthly quota (50/mo on lifetime).",
+      inputSchema: {
+        my_domain: z.string().min(1).max(253).describe("Your domain."),
+        competitor_domains: z.array(z.string().min(1).max(253)).min(1).max(5).describe("1 to 5 competitor domains."),
+      },
+      outputSchema: gapAnalysisOutputShape,
+      annotations: { title: "Competitor backlink gap analysis", ...READ_ONLY },
     },
     async ({ my_domain, competitor_domains }) => {
       const result = await runGapJob(my_domain, competitor_domains);
+      const structuredContent = {
+        my_domain: result.my_domain,
+        competitor_domains: result.competitor_domains,
+        total_gaps: result.total_gaps,
+        gaps: (result.gaps || []).map((g: any) => ({ linking_domain: g.linking_domain, found_on: g.found_on || [] })),
+      };
       const summary =
         `${result.total_gaps} gap domains link to a competitor but not to ${result.my_domain} ` +
         `(competitors: ${result.competitor_domains.join(", ")}).`;
-      return { content: [{ type: "text", text: summary }, { type: "text", text: JSON.stringify(result, null, 2) }] };
+      return { content: [{ type: "text", text: summary }, { type: "text", text: JSON.stringify(structuredContent, null, 2) }], structuredContent };
     },
   );
 
-  server.tool(
+  server.registerTool(
     "gap_outreach_targets",
-    "The warm-outreach play. Runs a gap analysis, then ranks results: PRIORITY = " +
-      "domains linking to ALL your competitors but not you (publishers who cover your " +
-      "whole space and have never heard of you), SECONDARY = domains linking to 2+ " +
-      "competitors. Platform/CDN noise is filtered, top N priority targets are scored " +
-      "by authority. Use 2-3 competitors. Costs one gap job + one backlinks call per enriched target.",
     {
-      my_domain: z.string().min(1).max(253).describe("Your domain."),
-      competitor_domains: z.array(z.string().min(1).max(253)).min(2).max(5).describe("2 to 5 competitor domains (2-3 recommended)."),
-      include_platforms: z.boolean().optional().describe("Keep platform/CDN/social domains in the list. Default false."),
-      enrich_top: z.number().int().min(0).max(25).optional().describe("Authority-score the top N priority targets. Default 10; each costs one backlinks call. 0 disables."),
+      title: "Outreach target finder",
+      description:
+        "The warm-outreach play. Runs a gap analysis, then ranks results: PRIORITY = " +
+        "domains linking to ALL your competitors but not you (publishers who cover your " +
+        "whole space and have never heard of you), SECONDARY = domains linking to 2+ " +
+        "competitors. Platform/CDN noise is filtered, top N priority targets are scored " +
+        "by authority. Use 2-3 competitors. Costs one gap job + one backlinks call per enriched target.",
+      inputSchema: {
+        my_domain: z.string().min(1).max(253).describe("Your domain."),
+        competitor_domains: z.array(z.string().min(1).max(253)).min(2).max(5).describe("2 to 5 competitor domains (2-3 recommended)."),
+        include_platforms: z.boolean().optional().describe("Keep platform/CDN/social domains in the list. Default false."),
+        enrich_top: z.number().int().min(0).max(25).optional().describe("Authority-score the top N priority targets. Default 10; each costs one backlinks call. 0 disables."),
+      },
+      outputSchema: outreachOutputShape,
+      annotations: { title: "Outreach target finder", ...READ_ONLY },
     },
     async ({ my_domain, competitor_domains, include_platforms, enrich_top }) => {
       const result = await runGapJob(my_domain, competitor_domains);
@@ -227,23 +322,41 @@ export function buildServer(getApiKey: () => string): McpServer {
         (filteredOut ? `${filteredOut} platform/CDN domains filtered out. ` : "") +
         (enrichedCount ? `Top ${enrichedCount} scored by authority. ` : "") +
         `Pitch the priority list first — they already link to your whole category.`;
+      const structuredContent = {
+        my_domain,
+        competitor_domains,
+        priority_targets: priority,
+        secondary_targets: secondary,
+        total_gaps: result.total_gaps,
+        platforms_filtered: include_platforms ? 0 : filteredOut,
+        authority_enriched: enrichedCount,
+      };
       return {
         content: [
           { type: "text", text: summary },
-          { type: "text", text: JSON.stringify({ my_domain, competitor_domains, priority_targets: priority, secondary_targets: secondary, total_gaps: result.total_gaps, platforms_filtered: include_platforms ? 0 : filteredOut, authority_enriched: enrichedCount }, null, 2) },
+          { type: "text", text: JSON.stringify(structuredContent, null, 2) },
         ],
+        structuredContent,
       };
     },
   );
 
-  server.tool(
+  server.registerTool(
     "releases",
-    "List the Common Crawl releases the API can query. Does not count against any quota. " +
-      "Use a release `id` with the backlinks tool to query a specific snapshot.",
-    {},
+    {
+      title: "List Common Crawl releases",
+      description:
+        "List the Common Crawl releases the API can query. Does not count against any quota. " +
+        "Use a release `id` with the backlinks tool to query a specific snapshot.",
+      outputSchema: releasesOutputShape,
+      annotations: { title: "List Common Crawl releases", ...READ_ONLY },
+    },
     async () => {
       const data = await api("GET", "/releases");
-      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+      const structuredContent = {
+        releases: (data.releases || []).map((r: any) => ({ id: r.id, label: r.label, available: !!r.available })),
+      };
+      return { content: [{ type: "text", text: JSON.stringify(structuredContent, null, 2) }], structuredContent };
     },
   );
 
