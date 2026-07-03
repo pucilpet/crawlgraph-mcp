@@ -13,7 +13,7 @@ MCP server for the [CrawlGraph](https://crawlgraph.com) backlink-intelligence AP
 
 ## Install
 
-You need a CrawlGraph API key (`cg_live_...`) from your [account page](https://crawlgraph.com/account). API access is a lifetime-tier feature.
+You need a CrawlGraph API key (`cg_live_...`). **Free tier: 15 backlink calls/month, no card** - get a key emailed to you at [crawlgraph.com/docs/api](https://crawlgraph.com/docs/api). The `gap_analysis` and `gap_outreach_targets` tools need the [$99 lifetime tier](https://crawlgraph.com) (1,000 calls + 50 gap analyses/month, no subscription).
 
 ### Claude Desktop / Claude Code
 
