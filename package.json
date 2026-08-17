@@ -2,6 +2,7 @@
   "name": "crawlgraph-mcp",
   "version": "0.2.2",
   "description": "MCP server for the CrawlGraph backlink-intelligence API (Common Crawl webgraph). Backlink lookups, competitor gap analysis, and a ready-made outreach-target finder for any MCP client.",
+  "mcpName": "io.github.pucilpet/crawlgraph-mcp",
   "license": "MIT",
   "author": "Petteri Pucilowski",
   "homepage": "https://crawlgraph.com",
