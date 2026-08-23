@@ -1,7 +1,7 @@
 /**
  * Shared CrawlGraph MCP server definition.
  *
- * `buildServer(getApiKey)` returns a McpServer with the four tools wired up.
+ * `buildServer(getApiKey)` returns a McpServer with the five tools wired up.
  * The API key is resolved lazily per call via `getApiKey`, so the same tool
  * definitions serve both transports:
  *   - stdio (src/index.ts): getApiKey reads process.env.CRAWLGRAPH_API_KEY
@@ -14,7 +14,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ListResourcesRequestSchema, ListPromptsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
-export const VERSION = "0.2.2";
+export const VERSION = "0.3.0";
 const BASE_URL = (process.env.CRAWLGRAPH_BASE_URL || "https://crawlgraph.com").replace(/\/+$/, "");
 const UA = `crawlgraph-mcp/${VERSION}`;
 
@@ -98,6 +98,43 @@ const releasesOutputShape = {
   releases: z.array(z.object({ id: z.string(), label: z.string(), available: z.boolean() })),
 };
 
+const backlinkChangesReleaseShape = {
+  id: z.string(),
+  label: z.string(),
+};
+
+const backlinkChangesObservedDomainShape = {
+  linking_domain: z.string(),
+  num_hosts: z.number(),
+  cg_authority: z.number().nullable(),
+};
+
+const backlinkChangesOutputShape = {
+  domain: z.string(),
+  comparison_available: z.boolean(),
+  from_release: z.object(backlinkChangesReleaseShape).nullable(),
+  to_release: z.object(backlinkChangesReleaseShape),
+  counts: z.object({
+    from_snapshot: z.number(),
+    to_snapshot: z.number(),
+    added: z.number(),
+    removed: z.number(),
+    authority_moved: z.number(),
+  }),
+  added: z.array(z.object(backlinkChangesObservedDomainShape)),
+  removed: z.array(z.object(backlinkChangesObservedDomainShape)),
+  authority_moved: z.array(z.object({
+    linking_domain: z.string(),
+    from_authority: z.number(),
+    to_authority: z.number(),
+    delta: z.number(),
+  })),
+  truncated: z.boolean(),
+  cap: z.number(),
+  snapshot_caveat: z.string(),
+  message: z.string().optional(),
+};
+
 export function buildServer(getApiKey: () => string): McpServer {
   async function api(method: "GET" | "POST", path: string, body?: unknown): Promise<any> {
     const key = (getApiKey() || "").trim();
@@ -123,10 +160,11 @@ export function buildServer(getApiKey: () => string): McpServer {
       /* non-JSON error body */
     }
     if (!res.ok) {
-      const detail =
+      const detail = (
         json?.error || json?.message
           ? `${json.error ?? "error"}: ${json.message ?? ""}`
-          : text.slice(0, 300);
+          : text.slice(0, 300)
+      ).replaceAll(key, "[redacted]");
       if (res.status === 401 || res.status === 403) {
         throw new CrawlGraphError(
           `Auth failed (${res.status}). Check the API key is a valid cg_live_ key with lifetime API access. ${detail}`,
@@ -224,6 +262,85 @@ export function buildServer(getApiKey: () => string): McpServer {
         `(release ${data.release_label}). Showing ${data.returned}. ` +
         `Target authority: ${data.cg_authority ?? "n/a"}/100.`;
       return { content: [{ type: "text", text: summary }, { type: "text", text: JSON.stringify(structuredContent, null, 2) }], structuredContent };
+    },
+  );
+
+  server.registerTool(
+    "backlink_changes",
+    {
+      title: "Backlink changes between releases",
+      description:
+        "Compare referring-domain observations between two Common Crawl releases. "+
+        "When from_release and to_release are omitted, the API chooses the newest "+
+        "queryable release pair. Costs one backlinks call against the monthly quota. "+
+        "A removed domain means it was not observed in the newer Common Crawl snapshot, "+
+        "not that deletion from the live web has been proven. comparison_available: false "+
+        "is a valid successful response when two queryable snapshots do not exist.",
+      inputSchema: {
+        domain: z.string().min(1).max(253).describe("Target domain, e.g. 'example.com'."),
+        from_release: z.string().optional().describe("Older Common Crawl release id."),
+        to_release: z.string().optional().describe("Newer Common Crawl release id."),
+      },
+      outputSchema: backlinkChangesOutputShape,
+      annotations: { title: "Backlink changes between releases", ...READ_ONLY },
+    },
+    async ({ domain, from_release, to_release }) => {
+      const params = new URLSearchParams({ domain });
+      if (from_release !== undefined) params.set("from", from_release);
+      if (to_release !== undefined) params.set("to", to_release);
+      const data = await api("GET", `/changes?${params.toString()}`);
+      const structuredContent = {
+        domain: data.domain,
+        comparison_available: data.comparison_available,
+        from_release: data.from_release
+          ? { id: data.from_release.id, label: data.from_release.label }
+          : null,
+        to_release: { id: data.to_release.id, label: data.to_release.label },
+        counts: {
+          from_snapshot: data.counts.from_snapshot,
+          to_snapshot: data.counts.to_snapshot,
+          added: data.counts.added,
+          removed: data.counts.removed,
+          authority_moved: data.counts.authority_moved,
+        },
+        added: (data.added || []).map((row: any) => ({
+          linking_domain: row.linking_domain,
+          num_hosts: row.num_hosts,
+          cg_authority: row.cg_authority ?? null,
+        })),
+        removed: (data.removed || []).map((row: any) => ({
+          linking_domain: row.linking_domain,
+          num_hosts: row.num_hosts,
+          cg_authority: row.cg_authority ?? null,
+        })),
+        authority_moved: (data.authority_moved || []).map((row: any) => ({
+          linking_domain: row.linking_domain,
+          from_authority: row.from_authority,
+          to_authority: row.to_authority,
+          delta: row.delta,
+        })),
+        truncated: data.truncated,
+        cap: data.cap,
+        ...(data.message !== undefined ? { message: data.message } : {}),
+        snapshot_caveat: data.snapshot_caveat,
+      };
+      const comparisonSummary = data.comparison_available
+        ? `${data.counts.added} added, ${data.counts.removed} removed, `+
+          `${data.counts.authority_moved} authority moved`
+        : "comparison unavailable";
+      const summary =
+        `${data.domain}: ${comparisonSummary}. `+
+        "Default comparison is the newest queryable release pair. Costs one backlinks call. "+
+        "Removed domains mean not observed in the newer Common Crawl snapshot, not proven "+
+        "deletion from the live web. comparison_available: false is a valid response when "+
+        "two queryable snapshots do not exist.";
+      return {
+        content: [
+          { type: "text", text: summary },
+          { type: "text", text: JSON.stringify(structuredContent, null, 2) },
+        ],
+        structuredContent,
+      };
     },
   );
 

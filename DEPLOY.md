@@ -4,21 +4,18 @@ The hosted remote MCP server runs at **https://crawlgraph.com/mcp** (Streamable
 HTTP transport, stateless, multi-tenant — each request carries the caller's own
 `Authorization: Bearer cg_live_…` key).
 
-## How it's deployed (prod: backlinkrobot / crawlback stack)
+## Hosted lifecycle ownership
 
-It runs as a standalone container on the `crawlback_default` docker network,
-fronted by the existing crawlback nginx + Cloudflare. It is intentionally NOT in
-the crawlback compose file (decoupled from the main stack).
+The authoritative hosted lifecycle and smoke process lives in the crawlback
+repository's [`docs/ops/hosted-mcp-smoke.md`](https://github.com/pucilpet/crawlback/blob/master/docs/ops/hosted-mcp-smoke.md).
+That runbook records the externally owned container boundary, release gates,
+redaction rules, and operator-approved functional verification. Follow it in
+full for any hosted release; this repository intentionally does not prescribe
+an ad hoc `docker rm -f` or replacement-container shortcut.
 
-```bash
-# on the prod host
-cd /root/crawlgraph-mcp && git pull
-docker build -t crawlgraph-mcp:latest .
-docker rm -f crawlgraph-mcp 2>/dev/null || true
-docker run -d --name crawlgraph-mcp --network crawlback_default \
-  --restart unless-stopped -e PORT=8080 \
-  --entrypoint node crawlgraph-mcp:latest dist/http.js
-```
+The hosted server remains a standalone container on the `crawlback_default`
+Docker network, fronted by the existing crawlback nginx + Cloudflare. It is
+intentionally not in the crawlback compose file.
 
 nginx route (in crawlback `nginx/nginx.conf`):
 
@@ -41,15 +38,12 @@ After editing nginx.conf: `docker exec crawlback-nginx nginx -t` then
 `docker compose up -d --force-recreate nginx` (a plain reload can miss the
 mounted-file change — recreate is reliable).
 
-## Redeploy after a code change
+## Release note
 
-```bash
-cd /root/crawlgraph-mcp && git pull
-docker build -t crawlgraph-mcp:latest .
-docker rm -f crawlgraph-mcp && docker run -d --name crawlgraph-mcp \
-  --network crawlback_default --restart unless-stopped -e PORT=8080 \
-  --entrypoint node crawlgraph-mcp:latest dist/http.js
-```
+Build and review the package locally first. Publishing or deploying a reviewed
+commit requires explicit operator authorization and must use the crawlback
+runbook's lifecycle record and smoke checks. Do not infer that a local package
+version is live at the hosted endpoint.
 
 ## Health
 
