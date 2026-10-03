@@ -1,6 +1,6 @@
 {
   "name": "crawlgraph-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "MCP server for the CrawlGraph backlink-intelligence API (Common Crawl webgraph). Backlink lookups, competitor gap analysis, and a ready-made outreach-target finder for any MCP client.",
   "mcpName": "io.github.pucilpet/crawlgraph-mcp",
   "license": "MIT",
@@ -43,7 +43,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "express": "^4.21.2",
     "zod": "^3.23.8"
   },

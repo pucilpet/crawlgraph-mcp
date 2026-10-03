@@ -13,12 +13,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ListResourcesRequestSchema, ListPromptsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { createApiKeyClient, CrawlGraphError } from "./api-client.js";
+import { buildDirectoryServer as createDirectoryServer, type DirectoryBackend, type DirectoryFactoryOptions } from "./tool-profile.js";
+import type { ProtectedConnectorContext } from "./oauth/router.js";
 
-export const VERSION = "0.3.0";
-const BASE_URL = (process.env.CRAWLGRAPH_BASE_URL || "https://crawlgraph.com").replace(/\/+$/, "");
-const UA = `crawlgraph-mcp/${VERSION}`;
+export const VERSION = "0.4.0";
+export { CrawlGraphError } from "./api-client.js";
 
-export class CrawlGraphError extends Error {}
+export function buildDirectoryServer(context: ProtectedConnectorContext, backend: DirectoryBackend,
+  options: Omit<DirectoryFactoryOptions, "version"> = {}): McpServer {
+  return createDirectoryServer(context, backend, { ...options, version: VERSION });
+}
 
 const PLATFORM_NOISE = new Set([
   "amazonaws.com", "cloudfront.net", "googleusercontent.com", "azurewebsites.net",
@@ -136,47 +141,7 @@ const backlinkChangesOutputShape = {
 };
 
 export function buildServer(getApiKey: () => string): McpServer {
-  async function api(method: "GET" | "POST", path: string, body?: unknown): Promise<any> {
-    const key = (getApiKey() || "").trim();
-    if (!key) {
-      throw new CrawlGraphError(
-        "No CrawlGraph API key. For the hosted endpoint send 'Authorization: Bearer cg_live_...'; for the local server set CRAWLGRAPH_API_KEY. Get a key at https://crawlgraph.com/account.",
-      );
-    }
-    const res = await fetch(`${BASE_URL}/api/v1${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-        "User-Agent": UA,
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const text = await res.text();
-    let json: any = null;
-    try {
-      json = text ? JSON.parse(text) : null;
-    } catch {
-      /* non-JSON error body */
-    }
-    if (!res.ok) {
-      const detail = (
-        json?.error || json?.message
-          ? `${json.error ?? "error"}: ${json.message ?? ""}`
-          : text.slice(0, 300)
-      ).replaceAll(key, "[redacted]");
-      if (res.status === 401 || res.status === 403) {
-        throw new CrawlGraphError(
-          `Auth failed (${res.status}). Check the API key is a valid cg_live_ key with lifetime API access. ${detail}`,
-        );
-      }
-      if (res.status === 429) {
-        throw new CrawlGraphError(`Rate limit or monthly quota exceeded (429). ${detail}`);
-      }
-      throw new CrawlGraphError(`API ${res.status}: ${detail}`);
-    }
-    return json;
-  }
+  const api = createApiKeyClient(getApiKey, VERSION);
 
   async function domainAuthority(domain: string): Promise<{ cg_authority: number | null; cg_rank: number | null }> {
     const data = await api("POST", "/backlinks", { domain, limit: 1 });
@@ -224,7 +189,8 @@ export function buildServer(getApiKey: () => string): McpServer {
         "Look up referring domains (backlinks) for a single target domain from the " +
         "Common Crawl webgraph. Returns each linking domain with host count and " +
         "CrawlGraph authority score, plus the target's own authority/rank. " +
-        "Costs one backlinks call against the monthly quota (1,000/mo on lifetime).",
+        "Costs one backlinks call against the monthly quota (1,000/mo for lifetime or eligible monthly paid access). " +
+        "These snapshot observations do not prove live links.",
       inputSchema: {
         domain: z.string().min(1).max(253).describe("Target domain, e.g. 'stripe.com'."),
         limit: z.number().int().min(1).max(10000).optional().describe("Max rows (1..10000, default 1000)."),
@@ -349,10 +315,11 @@ export function buildServer(getApiKey: () => string): McpServer {
     {
       title: "Competitor backlink gap analysis",
       description:
-        "Run a competitor backlink gap analysis: find domains that link to one or more " +
+        "Run a competitor backlink gap analysis: find domains observed linking to one or more " +
         "of your competitors but NOT to you. Submits an async job and polls until done " +
         "(usually 5-30s). Returns every gap with `found_on` listing which competitors " +
-        "each domain links to. Costs one gap job against the monthly quota (50/mo on lifetime).",
+        "each domain was observed linking to. Costs one gap job against the monthly quota " +
+        "(50/mo for lifetime or eligible monthly paid access). These observations do not prove live links.",
       inputSchema: {
         my_domain: z.string().min(1).max(253).describe("Your domain."),
         competitor_domains: z.array(z.string().min(1).max(253)).min(1).max(5).describe("1 to 5 competitor domains."),
@@ -381,8 +348,8 @@ export function buildServer(getApiKey: () => string): McpServer {
       title: "Outreach target finder",
       description:
         "The warm-outreach play. Runs a gap analysis, then ranks results: PRIORITY = " +
-        "domains linking to ALL your competitors but not you (publishers who cover your " +
-        "whole space and have never heard of you), SECONDARY = domains linking to 2+ " +
+        "domains observed linking to ALL your competitors but not you (research candidates, " +
+        "without proof of live links or publisher awareness), SECONDARY = domains observed linking to 2+ " +
         "competitors. Platform/CDN noise is filtered, top N priority targets are scored " +
         "by authority. Use 2-3 competitors. Costs one gap job + one backlinks call per enriched target.",
       inputSchema: {

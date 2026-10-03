@@ -1,24 +1,36 @@
 # crawlgraph-mcp
 
-MCP server for the [CrawlGraph](https://crawlgraph.com) backlink-intelligence API. Gives any MCP client — Claude Desktop, Claude Code, Cursor, Cline, Zed, Windsurf — backlink lookups and competitor gap analysis built on the public [Common Crawl](https://commoncrawl.org) webgraph (4.4B edges, 120M domains).
+Five MCP tools for backlink research using [CrawlGraph](https://crawlgraph.com)
+and Common Crawl snapshots: `backlinks`, `backlink_changes`, `gap_analysis`,
+`gap_outreach_targets`, and `releases`. Outreach tools identify research
+candidates; they do not send messages or create contacts.
 
-> Backlink data without the $129/month subscription. CrawlGraph is $99 lifetime; API access is included on the lifetime tier.
+## Choose an authentication profile
 
-## What you can do
+| Surface | Credentials | Tool profile |
+| --- | --- | --- |
+| npm / local stdio | Your `CRAWLGRAPH_API_KEY` (`cg_live_…`) | Legacy |
+| `https://crawlgraph.com/mcp` | Your API key in `Authorization: Bearer cg_live_…` | Legacy |
+| `https://crawlgraph.com/mcp/connectors` | Account-linked OAuth access token in the Authorization header | Bounded directory profile, when enabled |
 
-- **`backlinks`** — every referring domain for a target, with authority scores
-- **`gap_analysis`** — domains linking to your competitors but not to you
-- **`gap_outreach_targets`** — the warm-outreach play: the domains that link to **all** of your competitors but not to you, ranked and de-noised. These are publishers who cover your whole space and have simply never heard of you — the warmest backlink targets you will ever pitch.
-- **`backlink_changes`** — additions, observed absences, and authority movement between Common Crawl snapshots
-- **`releases`** — list the Common Crawl snapshots you can query
+Legacy `/mcp` also accepts Smithery's `?apiKey=…` and base64 JSON `?config=…`
+forms. Header credentials take precedence, then `apiKey`, then packed `config`.
+Prefer the Authorization header. The connector endpoint rejects API keys,
+query credentials and packed configuration; OAuth tokens never go to the
+public `/api/v1` API.
 
-## Install
+Directory approval and real Claude/OpenAI compatibility verification remain
+pending. No Verified listing or logo is claimed. This checkout's source
+version is **0.4.0**; it does not establish the current npm or hosted version.
+Verify each distribution separately through the operator runbooks linked in
+[DEPLOY.md](DEPLOY.md).
 
-You need a CrawlGraph API key (`cg_live_...`). **Free tier: 15 backlink calls/month, no card** - get a key emailed to you at [crawlgraph.com/docs/api](https://crawlgraph.com/docs/api). The `gap_analysis` and `gap_outreach_targets` tools need the [$99 lifetime tier](https://crawlgraph.com) (1,000 calls + 50 gap analyses/month, no subscription).
+## API-key setup: npm / stdio and legacy HTTP
 
-### Claude Desktop / Claude Code
+Obtain a key through [CrawlGraph's API onboarding](https://crawlgraph.com/docs/api).
+The free-key flow emails a key; it does not sign you into an account.
 
-Add to your MCP config (`claude_desktop_config.json`, or `.mcp.json` for Claude Code):
+For Claude Desktop / Claude Code, put this in your client's MCP configuration:
 
 ```json
 {
@@ -34,94 +46,155 @@ Add to your MCP config (`claude_desktop_config.json`, or `.mcp.json` for Claude 
 }
 ```
 
-### Cursor / Windsurf / Cline / Zed
+Cursor, Windsurf, Cline and Zed use the same command/environment arrangement.
+Streamable HTTP clients can use `https://crawlgraph.com/mcp` with their own
+bearer API key. Confirm the hosted `tools/list` response before relying on a
+specific source feature.
 
-Same shape — point the client's MCP config at `npx -y crawlgraph-mcp` with `CRAWLGRAPH_API_KEY` in the env. Restart the client and the five tools appear.
+| Local stdio setting | Required | Default |
+| --- | --- | --- |
+| `CRAWLGRAPH_API_KEY` | Yes for tool execution; resolved lazily | — |
+| `CRAWLGRAPH_BASE_URL` | No; legacy REST adapter only | `https://crawlgraph.com` |
 
-### Hosted endpoint
+## Account linking: OAuth connector
 
-Clients that support Streamable HTTP can use the zero-install hosted endpoint
-at `https://crawlgraph.com/mcp` with the same bearer key. This package's local
-0.3.0 server exposes the five tools above; hosted package versions are released
-separately and must be verified with `tools/list` before relying on the new
-`backlink_changes` tool. See the [hosted MCP smoke runbook](https://github.com/pucilpet/crawlback/blob/master/docs/ops/hosted-mcp-smoke.md)
-for the operator-owned release and verification process.
+When the operator enables the reviewed service, connect to
+`https://crawlgraph.com/mcp/connectors` using an existing CrawlGraph account,
+sign in and approve consent in the original connection browser. Account
+creation is outside OAuth. If you need an account, follow the disclosed
+onboarding flow, then return and request sign-in; an emailed API key alone is
+not a login session.
 
-## The outreach play, in one prompt
+The issuer is `https://crawlgraph.com`, the exact resource is
+`https://crawlgraph.com/mcp/connectors`, and the only scope is
+`crawlgraph:read`. Public clients use authorization code plus S256 PKCE and
+`token_endpoint_auth_method=none`. Omitted registration auth method is
+normalized to `none` and any SDK-generated secret is discarded. Confidential
+client methods and metadata-document fetching are unsupported. Callbacks
+must be exact operator-approved HTTPS URLs. OpenAI's callback must come from
+the actual portal; this repository does not supply a guessed callback.
 
-Once it's connected, you don't call the tools by hand — you describe the goal:
+Authorization and code exchange require the exact raw resource value. At code
+exchange a supplied `redirect_uri` must exactly match the stored callback;
+omission retains that callback. Refresh may omit resource and scope to retain
+the original grant. PKCE is validated by the backend during the atomic code
+exchange, alongside client/resource/redirect/scope checks.
 
-> "Use gap_outreach_targets for mydomain.com against competitor-a.com and competitor-b.com, then draft a short, specific outreach email to each priority target."
+Use account connection management to disconnect and revoke the entire grant
+and refresh family. An expired access token can be refreshed while its grant
+and refresh family remain valid; revoked or expired grants require
+reconnecting. Discovery, OAuth and introspection outages return 503 without
+a relink challenge. Execution outages return a safe tool error inside the
+HTTP 200 MCP result, without relink metadata. Tool-time revocation is reported
+through `mcp/www_authenticate` result metadata. Refresh rotation
+has no retry grace: concurrent reuse revokes the family, and a lost token
+response may require reconnecting. A 503 after a possible commit does not
+promise an unused code or refresh token.
 
-Behind the scenes the server submits the gap job, polls until it completes, filters the results down to the domains that link to **every** competitor but not to you, strips out platform/CDN noise (amazonaws, github, facebook, ...), and hands your agent a clean ranked list to write outreach against.
+## Quotas and directory tools
 
-**Why 2-3 competitors, not one:** a site linking to one competitor might be a fluke or a paid placement. A site linking to three of your competitors is a publisher who covers your whole category. That overlap is the qualifier.
+Both auth profiles share the account's UTC calendar-month counters. Free
+accounts have **15 backlinks calls and 0 gap jobs**; accounts with current paid
+access have **1,000 backlinks calls and 50 gap jobs**. Paid eligibility follows
+the backend's current entitlement rules. Release inventory consumes no
+research quota. `backlink_changes` shares the backlinks counter.
 
-## Tools reference
+Directory inputs and costs:
 
-| Tool | Arguments | Quota cost |
-|------|-----------|------------|
-| `backlinks` | `domain`, `limit?`, `sort?` (`authority`\|`hosts`), `release_id?` | 1 backlinks call |
-| `backlink_changes` | `domain`, `from_release?`, `to_release?` | 1 backlinks call |
-| `gap_analysis` | `my_domain`, `competitor_domains[]` (1-5) | 1 gap job |
-| `gap_outreach_targets` | `my_domain`, `competitor_domains[]` (2-5), `include_platforms?` | 1 gap job |
-| `releases` | — | free |
+| Tool | Arguments | Cost |
+| --- | --- | --- |
+| `backlinks` | `domain`, `limit?`, `sort?` (`authority` or `hosts`), `release_id?` | 1 backlinks call |
+| `backlink_changes` | `domain`, `limit?`, `from_release?`, `to_release?` | 1 backlinks call |
+| `gap_analysis` | `my_domain`, `competitor_domains[]` (1–5), `limit?`, `job_id?` | New submission: 1 gap job; polling/resume: 0 |
+| `gap_outreach_targets` | Gap inputs plus `include_platforms?`, `enrich_authority_top?` | New submission: 1 gap job; optional N extra backlinks calls |
+| `releases` | `limit?` | 0 |
 
-Lifetime quota: 1,000 backlinks calls + 50 gap jobs per calendar month. Full API reference: [crawlgraph.com/docs/api](https://crawlgraph.com/docs/api).
+Directory lists default to **20**, maximum **100**. The complete serialized
+UTF-8 `CallToolResult`, including structured data, text and metadata, is
+limited to **65,536 bytes**. Additional output clipping is disclosed in
+`crawlgraph/output` metadata, retaining original observed totals, source caps,
+quota accounting, provenance and job handles. Large exports belong on the
+account/API surface.
 
-`backlink_changes` uses the newest queryable release pair when release ids are
-omitted. Its `removed` list means a referring domain was not observed in the
-newer Common Crawl snapshot, not that a live link was proven deleted. If two
-queryable snapshots do not exist, it returns a successful
-`comparison_available: false` response with the reason instead of inventing a
-comparison.
+Gap tools poll for at most **75 seconds within a 90-second tool budget**. A
+pending result includes `job_id` and the normalized request. Resume the same
+tool with that handle and query; a fresh valid grant for the same owner can
+resume after reconnecting. Polling costs zero gap jobs. Never automatically
+submit a replacement after timeout, cancellation, network loss or a stale
+worker: the accepted job may still complete. Cancellation stops further
+polling. An accepted submission remains charged; a lost/malformed response
+reports unknown consumption rather than claiming zero.
 
-Example input:
+Node writes bounded JSON telemetry to stderr. Each directory tool call records
+an internally generated correlation ID, fixed tool name (or `unknown`), final
+envelope status, `isError`, allowlisted primary and partial error codes, latency,
+and the exact final serialized UTF-8 result size, excluding transport framing.
+Known charged-call counts and unknown-consumption categories come from the
+final envelope. Pending cancellations and completed results with partial
+revocation retain their distinct status and error fields. HTTP/OAuth errors
+record only a fixed route category, status, allowlisted code and a separate
+response-local correlation ID. Logging failures cannot change responses.
+Logs omit arguments, domains, results, job/account/grant/client/source IDs,
+caller request IDs, exception text, URLs, headers, configuration and credentials.
 
-```json
-{
-  "domain": "example.com",
-  "from_release": "cc-main-2025-50",
-  "to_release": "cc-main-2026-04"
-}
-```
+OAuth source admission groups IPv6 addresses by /64 only in the local bucket
+key; mapped IPv4 addresses use the same bucket as their IPv4 form. Private
+RPCs still receive the full normalized verified ingress source. The bounded
+bucket map fails closed at capacity without evicting live windows; the backend
+continues enforcing its own policies.
 
-Example output (abbreviated):
+Outreach preserves the backend ranking by competitor overlap, authority and
+domain. Platform-filter counts describe only the returned backend sample.
+Enrichment defaults to **0**; explicitly request `enrich_authority_top=N`
+(**0–5**) for up to N extra backlinks calls on retained targets. Partial
+failures retain completed results, per-item provenance, actual known charges,
+the latest observed quota and any unknown consumption. Verified jobs use
+their attested release for enrichment; legacy jobs keep null provenance and
+record separate lookup releases.
 
-```json
-{
-  "domain": "example.com",
-  "comparison_available": true,
-  "from_release": { "id": "cc-main-2025-50", "label": "Dec 2025" },
-  "to_release": { "id": "cc-main-2026-04", "label": "Apr 2026" },
-  "counts": { "from_snapshot": 4821, "to_snapshot": 4890, "added": 92, "removed": 23, "authority_moved": 17 },
-  "added": [],
-  "removed": [],
-  "authority_moved": [],
-  "truncated": false,
-  "cap": 100000,
-  "snapshot_caveat": "Common Crawl snapshots are periodic observations, not live link monitoring."
-}
-```
+Legacy tools retain their original fields and defaults: backlinks defaults to
+1,000 rows at the public API, maximum 10,000; outreach uses `enrich_top`, default
+10, maximum 25, with one backlinks call per enrichment. Legacy gap tools
+submit and poll within their existing 90-second window and have no directory
+`job_id` input. Check the selected profile before estimating quota use.
 
-## Configuration
+## Interpret results
 
-| Env var | Required | Default |
-|---------|----------|---------|
-| `CRAWLGRAPH_API_KEY` | yes | — |
-| `CRAWLGRAPH_BASE_URL` | no | `https://crawlgraph.com` |
+Common Crawl is a periodic observation, not live link monitoring. Named
+release provenance does not prove that a page currently links to a target.
+A removed referring domain means it was not observed in the newer snapshot,
+not proven live deletion. Unavailable comparison differs from zero changes;
+unknown totals and source-capped lower bounds differ from complete empty
+results. Gap provenance is saved at execution and retained on later polling.
+Older unattested artifacts report `legacy_unverified` and null release
+identity. A referring-domain overlap suggests a research candidate, not that
+a publisher has never heard of you.
 
-## Limitations
+Example research prompt:
 
-CrawlGraph is a **quarterly** Common Crawl snapshot, not a live crawler. It's built for one-off competitor prospecting and release-to-release comparison, not live backlink monitoring — for change-tracking within days, a continuous-crawl tool like Ahrefs is the right choice. The `backlink_changes` tool reports observations across indexed snapshots; an absent domain is not proof that a live link was deleted. The gap result carries which competitors each domain links to (`found_on`) but not per-domain authority; use the `backlinks` tool if you need to score an individual target.
+> Find backlink gaps for mine.example against a.example and b.example. If
+> pending, resume the returned job without resubmitting. Report provenance,
+> caps and quota use before proposing any optional authority enrichment.
 
-## Develop
+## Develop and validate
 
 ```bash
 npm install
 npm run build
-CRAWLGRAPH_API_KEY=cg_live_... npm start
+node --test tests/*.test.mjs
 ```
+
+The build is also the TypeScript check; no separate lint script is configured.
+Tests use the installed SDK, local HTTP fixtures and fake private/public
+backend replies. They require permission to bind loopback sockets and never
+need production credentials or live provider access. Node fixtures do not
+prove the backend's SQLite transactions, quota isolation or query pinning;
+separate crawlback backend HTTP tests and the full release gates cover those.
+
+Implementation references: [HTTP surfaces](src/http.ts),
+[OAuth router](src/oauth/router.ts), [provider](src/oauth/provider.ts),
+[private backend client](src/backend-client.ts),
+[directory tools](src/tool-profile.ts), and [legacy server](src/server.ts).
 
 ## License
 
