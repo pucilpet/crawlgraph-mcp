@@ -1,0 +1,32 @@
+{
+  "name": "crawlgraph",
+  "version": "0.4.0",
+  "description": "Research referring domains and competitor link gaps from Common Crawl snapshots through CrawlGraph's MCP server.",
+  "author": {
+    "name": "CrawlGraph"
+  },
+  "homepage": "https://crawlgraph.com",
+  "repository": "https://github.com/pucilpet/crawlgraph-mcp",
+  "license": "MIT",
+  "logo": "https://raw.githubusercontent.com/pucilpet/crawlgraph-mcp/master/logo.png",
+  "keywords": [
+    "seo",
+    "backlinks",
+    "common-crawl",
+    "competitor-analysis",
+    "mcp"
+  ],
+  "variables": {
+    "type": "object",
+    "properties": {
+      "CRAWLGRAPH_API_KEY": {
+        "type": "string",
+        "title": "CrawlGraph API key",
+        "description": "API key from https://crawlgraph.com/docs/api. Free keys include 15 backlink lookups per UTC month."
+      }
+    },
+    "required": [
+      "CRAWLGRAPH_API_KEY"
+    ]
+  }
+}

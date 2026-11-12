@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "crawlgraph": {
+      "url": "https://crawlgraph.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${CRAWLGRAPH_API_KEY}"
+      }
+    }
+  }
+}

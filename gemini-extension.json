@@ -1,0 +1,25 @@
+{
+  "name": "crawlgraph-mcp",
+  "version": "0.4.0",
+  "description": "Backlink lookups and competitor gap analysis on Common Crawl web graph snapshots.",
+  "mcpServers": {
+    "crawlgraph": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "crawlgraph-mcp"
+      ],
+      "env": {
+        "CRAWLGRAPH_API_KEY": "${CRAWLGRAPH_API_KEY}"
+      }
+    }
+  },
+  "settings": [
+    {
+      "name": "CrawlGraph API Key",
+      "description": "API key from https://crawlgraph.com/docs/api. Free keys include 15 backlink lookups per UTC month.",
+      "envVar": "CRAWLGRAPH_API_KEY",
+      "sensitive": true
+    }
+  ]
+}
