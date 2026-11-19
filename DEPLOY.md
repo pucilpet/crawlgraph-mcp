@@ -1,5 +1,26 @@
 # Hosted MCP operation
 
+## npm releases
+
+In [npm package settings](https://www.npmjs.com/package/crawlgraph-mcp/access),
+configure GitHub Actions as a trusted publisher for `pucilpet/crawlgraph-mcp`,
+workflow `publish.yml`, with no environment and `Allow npm publish` enabled.
+The workflow uses npm OIDC on GitHub-hosted runners.
+
+For a new stable version, update `package.json`, `package-lock.json`, and
+`VERSION` in `src/server.ts`. After the change lands on `master` and CI passes,
+push `vX.Y.Z` at the reviewed commit. The publish workflow tests and installs
+the tarball before publishing it, then checks npm's `latest` tag and integrity.
+
+For the existing unpublished `v0.4.0`, keep the tag at its original commit.
+Dispatch **Publish to npm** from `master` with version `0.4.0` so the package
+includes the updated README. Leave **Publish after validation** off to validate
+only. Enable it to publish from the dispatch run's source commit. If a publish
+run fails, inspect that run and check the registry version and integrity before
+rerunning it.
+
+## Hosted deployment
+
 Hosted deployment is operator-owned across crawlback and this standalone MCP
 service. Follow both authoritative crawlback runbooks **in full**:
 

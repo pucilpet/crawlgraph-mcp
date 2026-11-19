@@ -5,6 +5,10 @@ and Common Crawl snapshots: `backlinks`, `backlink_changes`, `gap_analysis`,
 `gap_outreach_targets`, and `releases`. Outreach tools identify research
 candidates; they do not send messages or create contacts.
 
+The [July–September 2026 Common Crawl snapshot](https://crawlgraph.com/blog/common-crawl-jul-sep-2026-release)
+covers **133.2 million domains** and **2.15 billion domain-level links**. Call
+`releases` to see the snapshots currently available for queries.
+
 ## Choose an authentication profile
 
 | Surface | Credentials | Tool profile |
@@ -20,10 +24,8 @@ query credentials and packed configuration; OAuth tokens never go to the
 public `/api/v1` API.
 
 Directory approval and real Claude/OpenAI compatibility verification remain
-pending. No Verified listing or logo is claimed. This checkout's source
-version is **0.4.0**; it does not establish the current npm or hosted version.
-Verify each distribution separately through the operator runbooks linked in
-[DEPLOY.md](DEPLOY.md).
+pending. The npm install uses the API-key profile. See the hosted service
+runbooks in [DEPLOY.md](https://github.com/pucilpet/crawlgraph-mcp/blob/master/DEPLOY.md).
 
 ## API-key setup: npm / stdio and legacy HTTP
 
