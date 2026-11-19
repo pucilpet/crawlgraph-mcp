@@ -1,0 +1,110 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version, without the v prefix'
+        required: true
+        type: string
+      publish:
+        description: 'Publish after validation'
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  package:
+    if: github.event_name == 'push' || github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Check release ref and version
+        id: version
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" "refs/remotes/origin/$DEFAULT_BRANCH"
+          version=$(node -p 'require("./package.json").version')
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$version" = "$(node -p 'require("./package-lock.json").version')"
+          test "$version" = "$(node -p 'require("./package-lock.json").packages[""].version')"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            test "$GITHUB_REF" = "refs/tags/v$version"
+          else
+            test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+            test "$version" = "$REQUESTED_VERSION"
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - name: Pack and smoke-test the npm executable
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          tarball="$RUNNER_TEMP/crawlgraph-mcp-$VERSION.tgz"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
+          smoke="$RUNNER_TEMP/npm-smoke"
+          mkdir -p "$smoke"
+          npm install --prefix "$smoke" --ignore-scripts --no-audit --no-fund "$tarball"
+          cp scripts/smoke-package.mjs "$smoke/"
+          node "$smoke/smoke-package.mjs" "$smoke/node_modules/.bin/crawlgraph-mcp" "$VERSION"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: npm-package
+          path: ${{ runner.temp }}/crawlgraph-mcp-${{ steps.version.outputs.value }}.tgz
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' || inputs.publish
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.package.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: npm-package
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Publish the tested tarball
+        run: npm publish "./crawlgraph-mcp-$VERSION.tgz" --access public --tag latest --ignore-scripts
+      - name: Verify registry version and tarball integrity
+        run: |
+          digest="sha512-$(openssl dgst -sha512 -binary "crawlgraph-mcp-$VERSION.tgz" | openssl base64 -A)"
+          for delay in 1 2 4 8 16; do
+            if [[ "$(npm view crawlgraph-mcp@latest version --prefer-online)" == "$VERSION" ]] &&
+               [[ "$(npm view "crawlgraph-mcp@$VERSION" dist.integrity --prefer-online)" == "$digest" ]]; then
+              exit 0
+            fi
+            sleep "$delay"
+          done
+          echo "The registry did not confirm latest=$VERSION and the tested tarball integrity" >&2
+          exit 1
